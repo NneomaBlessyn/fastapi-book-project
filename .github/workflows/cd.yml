@@ -1,0 +1,54 @@
+name: CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        run: |
+          docker buildx create --use
+
+      - name: Login to DockerHub
+        run: echo "${{ secrets.DOCKER_PAT }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+      - name: Build and Push Docker Image for `linux/amd64`
+        run: |
+          docker buildx build --platform linux/amd64 -t ${{ secrets.DOCKER_USERNAME }}/fastapi-app:latest . --push
+
+#      - name: Deploy Locally for `act`
+#        run: |
+#            docker build -t fastapi-app .
+#            docker tag fastapi-app ${{ secrets.DOCKER_USERNAME }}/fastapi-app:latest
+#            docker push ${{ secrets.DOCKER_USERNAME }}/fastapi-app:latest
+#            docker pull ${{ secrets.DOCKER_USERNAME }}/fastapi-app:latest
+#            docker stop fastapi-app || true
+#            docker rm fastapi-app || true
+#            docker run -d -p 8000:8000 --name fastapi-app ${{ secrets.DOCKER_USERNAME }}/fastapi-app:latest
+
+
+      - name: Configure SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" | base64 --decode > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy to EC2
+        run: |
+          ssh -i ~/.ssh/id_ed25519 ubuntu@${{ secrets.EC2_HOST }} <<EOF
+            docker login -u "${{ secrets.DOCKER_USERNAME }}" -p "${{ secrets.DOCKER_PAT }}"
+            docker pull ${{ secrets.DOCKER_USERNAME }}/fastapi-app:latest
+            docker stop fastapi-app || true
+            docker rm fastapi-app || true
+            docker run -d -p 8000:8000 --name fastapi-app ${{ secrets.DOCKER_USERNAME }}/fastapi-app:latest
+            sudo systemctl restart nginx
+          EOF
